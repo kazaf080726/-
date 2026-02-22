@@ -24,12 +24,12 @@ jobs:
           echo "✅ 编译环境安装完成"
 
       - name: 【2/12】自动拉取 SM-A226B 官方适配内核源码
-        # 直接拉取和你机型100%匹配的官方源码仓库，不用手动上传
         uses: actions/checkout@v4
         with:
           repository: EndlessFracture/android_kernel_samsung_a226b
           ref: main
           path: kernel
+
       - name: 【校验】检查内核源码完整性
         run: |
           if [ ! -f ./kernel/Makefile ]; then
@@ -50,6 +50,7 @@ jobs:
         run: |
           curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh | bash -s main
           echo "✅ KernelSU代码注入完成"
+
       - name: 【校验】检查KernelSU注入是否成功
         run: |
           if [ ! -d ./kernel/KernelSU ]; then
@@ -66,6 +67,7 @@ jobs:
           export PATH=$CC_PATH:$PATH
           make a226b_defconfig
           echo "✅ 机型配置加载完成"
+
       - name: 【校验】检查机型配置是否生效
         run: |
           if [ ! -f ./kernel/.config ]; then
@@ -92,6 +94,7 @@ jobs:
           export PATH=$CC_PATH:$PATH
           make -j$(nproc) Image.gz-dtb
           echo "✅ 内核编译完成"
+
       - name: 【校验】检查内核编译产物
         run: |
           if [ ! -f ./kernel/arch/arm64/boot/Image.gz-dtb ]; then
