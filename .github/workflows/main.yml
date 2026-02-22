@@ -1,0 +1,155 @@
+# 三星 SM-A226B 专属一键编译脚本 零上传 超稳安全版
+# 适配机型：Galaxy A22 5G SM-A226B MT6833V Android13 内核4.14.186
+name: Build A226B Stable Kernel with KernelSU
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+        set -e
+
+    steps:
+      - name: 【1/12】准备编译环境 安装所有依赖
+        run: |
+          sudo apt update
+          sudo apt install -y git build-essential bc bison flex libssl-dev libelf-dev zip curl python3 unzip wget
+          echo "✅ 编译环境安装完成"
+
+      - name: 【2/12】自动拉取 SM-A226B 官方适配内核源码
+        # 直接拉取和你机型100%匹配的官方源码仓库，不用手动上传
+        uses: actions/checkout@v4
+        with:
+          repository: EndlessFracture/android_kernel_samsung_a226b
+          ref: main
+          path: kernel
+      - name: 【校验】检查内核源码完整性
+        run: |
+          if [ ! -f ./kernel/Makefile ]; then
+            echo "❌ 错误：源码拉取失败！"
+            exit 1
+          fi
+          echo "✅ 内核源码完整性校验通过"
+
+      - name: 【3/12】下载专属编译工具链 Linaro GCC 7.5.0
+        run: |
+          wget -O gcc-linaro-7.5.0.tar.xz https://releases.linaro.org/components/toolchain/binaries/latest-7/aarch64-linux-gnu/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu.tar.xz
+          tar -xf gcc-linaro-7.5.0.tar.xz
+          echo "CC_PATH=$(pwd)/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu/bin" >> $GITHUB_ENV
+          echo "✅ 工具链下载完成"
+
+      - name: 【4/12】自动集成官方KernelSU 彻底解决符号缺失问题
+        working-directory: ./kernel
+        run: |
+          curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh | bash -s main
+          echo "✅ KernelSU代码注入完成"
+      - name: 【校验】检查KernelSU注入是否成功
+        run: |
+          if [ ! -d ./kernel/KernelSU ]; then
+            echo "❌ 错误：KernelSU注入失败，请检查网络连接！"
+            exit 1
+          fi
+          echo "✅ KernelSU注入校验通过"
+
+      - name: 【5/12】加载SM-A226B专属机型配置
+        working-directory: ./kernel
+        run: |
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export PATH=$CC_PATH:$PATH
+          make a226b_defconfig
+          echo "✅ 机型配置加载完成"
+      - name: 【校验】检查机型配置是否生效
+        run: |
+          if [ ! -f ./kernel/.config ]; then
+            echo "❌ 错误：机型配置加载失败！"
+            exit 1
+          fi
+          echo "✅ 机型配置校验通过"
+
+      - name: 【6/12】开启KernelSU内置稳定模式
+        working-directory: ./kernel
+        run: |
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export PATH=$CC_PATH:$PATH
+          scripts/config --file .config --enable CONFIG_KSU
+          scripts/config --file .config --disable CONFIG_KSU_DEBUG
+          echo "✅ KernelSU内置模式开启完成"
+
+      - name: 【7/12】编译内核 全核心并行加速
+        working-directory: ./kernel
+        run: |
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export PATH=$CC_PATH:$PATH
+          make -j$(nproc) Image.gz-dtb
+          echo "✅ 内核编译完成"
+      - name: 【校验】检查内核编译产物
+        run: |
+          if [ ! -f ./kernel/arch/arm64/boot/Image.gz-dtb ]; then
+            echo "❌ 错误：内核编译失败，没有生成镜像文件！"
+            exit 1
+          fi
+          echo "✅ 内核编译产物校验通过"
+
+      - name: 【8/12】拉取官方AnyKernel3 打包TWRP可刷包
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3.git
+          cp ./kernel/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          echo "✅ AnyKernel3拉取完成"
+
+      - name: 【9/12】写入SM-A226B专属防刷错配置
+        run: |
+          cat > AnyKernel3/anykernel.sh << 'EOF'
+# AnyKernel3 专属配置 SM-A226B 安全防刷错版
+do.devicecheck=1
+do.modules=0
+do.systemless=1
+do.cleanup=1
+do.cleanuponabort=0
+device.name1=SM-A226B
+device.name2=a22x
+device.name3=Galaxy A22 5G
+supported.versions=13
+supported.patchlevels=*
+
+block=/dev/block/by-name/boot
+is_slot_device=0
+ramdisk_compression=auto
+patch_vbmeta_flag=auto
+
+split_boot;
+flash_boot;
+EOF
+          echo "✅ 专属刷入配置写入完成"
+
+      - name: 【10/12】打包TWRP可刷入ZIP包
+        run: |
+          cd AnyKernel3
+          zip -r A226B-KernelSU-Stable-$(date +%Y%m%d).zip *
+          cd ..
+          mkdir -p output
+          cp ./kernel/arch/arm64/boot/Image.gz-dtb output/
+          cp AnyKernel3/A226B-KernelSU-Stable-*.zip output/
+          echo "✅ 刷入包打包完成"
+
+      - name: 【11/12】上传编译产物 直接下载就能用
+        uses: actions/upload-artifact@v4
+        with:
+          name: A226B-KernelSU-Stable-Output
+          path: output/
+          retention-days: 30
+
+      - name: 【12/12】编译完成 安全提示
+        run: |
+          echo "🎉 恭喜！SM-A226B 专属内核编译全部完成！"
+          echo "⚠️  刷入前务必在TWRP备份原厂boot分区！"
+          echo "⚠️  救砖兜底：刷错无限重启，直接进Download模式用Odin刷回原厂boot"
