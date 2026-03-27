@@ -1,0 +1,94 @@
+# 工作流名称：方便在GitHub Actions里识别编译任务
+name: Build SukiSU Ultra Kernel for Samsung Galaxy A22 5G (a22x)
+
+# 触发条件：仅支持手动点击「运行工作流」触发，避免代码推送自动编译浪费资源
+on:
+  workflow_dispatch:
+
+# 编译任务定义
+jobs:
+  build:
+    # 运行环境：选择Ubuntu 20.04（关键！老MTK内核兼容性最好，彻底避开Ubuntu22.04的shell/工具链兼容坑）
+    # 每一次运行都会创建一个全新的干净虚拟机，不会有之前的环境污染问题
+    runs-on: ubuntu-20.04
+
+    # 按顺序执行的编译步骤
+    steps:
+      # 步骤1：检出当前仓库（全新仓库是空的，这一步是初始化工作目录，保证后续操作路径干净）
+      - name: 初始化干净工作目录
+        uses: actions/checkout@v4
+
+      # 步骤2：安装编译内核必须的依赖工具，每一个包都有明确作用，无多余安装
+      - name: 安装内核编译依赖&ARM64交叉工具链
+        run: |
+          # 更新系统包列表，保证拿到的是最新稳定版
+          sudo apt update
+          # 安装内核编译必备的基础工具
+          sudo apt install -y \
+            bc \              # 内核编译用的数值计算器
+            bison \           # 语法解析器，处理Kconfig配置文件
+            flex \            # 词法解析器，和bison配套使用
+            libssl-dev \      # 内核镜像签名所需的加密库
+            libelf-dev \      # 处理ELF二进制文件的库，内核编译必备
+            make \            # 编译构建工具，执行Makefile
+            git \             # 代码拉取工具
+            zip               # 后续打包刷机包用的压缩工具
+          # 安装ARM64架构交叉编译工具链（专门给手机CPU用的编译器，彻底解决之前x86/ARM汇编器混乱的问题）
+          sudo apt install -y gcc-aarch64-linux-gnu
+
+      # 步骤3：拉取三星A22 5G专属的内核源码（编译的核心基础，包含机型所有硬件驱动）
+      - name: 拉取三星A22 5G(a22x)官方内核源码
+        run: git clone https://github.com/aHVzY2g/android-kernel-samsung-a22x kernel
+
+      # 步骤4：拉取SukiSU Ultra源码（ROOT功能的核心）
+      - name: 拉取SukiSU Ultra ROOT方案源码
+        run: git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra su
+
+      # 步骤5：把SukiSU集成进内核源码里
+      - name: 注入SukiSU到内核（自动集成SUSFS）
+        run: |
+          # 把SukiSU的内核模块代码复制到内核的驱动目录drivers/su
+          cp -r su/kernel kernel/drivers/su
+          # 进入内核源码目录
+          cd kernel
+          # 执行SukiSU官方的集成脚本setup.sh
+          # 这个脚本会自动做2件事：
+          # 1. 修改内核Makefile/Kconfig，把SukiSU编译进内核
+          # 2. 自动集成SUSFS（SU安全文件系统），无需额外手动操作
+          bash drivers/su/setup.sh
+
+      # 步骤6：生成机型专属的内核配置文件
+      - name: 生成a22x机型专属内核配置(defconfig)
+        run: |
+          # 进入内核源码目录
+          cd kernel
+          # make命令参数说明：
+          # ARCH=arm64          指定目标架构为ARM64（手机CPU架构）
+          # CROSS_COMPILE=...   指定交叉编译器前缀，用刚才安装的ARM64工具链
+          # O=out               指定所有编译输出都放在out目录，方便管理
+          # a22x_defconfig      三星A22 5G专属的配置文件，包含所有硬件驱动、功能开关
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=out a22x_defconfig
+          # 【可选】如果还是出现栈保护报错，取消下面这行的注释即可
+          # sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/# CONFIG_CC_STACKPROTECTOR_STRONG is not set/' out/.config
+
+      # 步骤7：正式编译内核
+      - name: 编译内核（生成最终镜像文件）
+        run: |
+          # 进入内核源码目录
+          cd kernel
+          # 编译命令参数说明：
+          # ARCH=arm64          目标架构ARM64
+          # CROSS_COMPILE=...   用ARM64交叉编译器
+          # O=out               输出到out目录
+          # -j3                 用3个CPU核心编译（GitHub Actions免费版限制，避免占满资源导致编译崩溃）
+          # Image.gz-dtb        最终编译目标：压缩后的内核镜像+设备树文件，是刷机的核心文件
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=out -j3 Image.gz-dtb
+
+      # 步骤8：上传编译好的内核镜像到GitHub Actions
+      - name: 上传编译好的内核镜像
+        uses: actions/upload-artifact@v4
+        with:
+          # 产物名称，方便你下载识别
+          name: SukiSU-Ultra-a22x-Image.gz-dtb
+          # 要上传的文件路径（编译好的内核镜像位置）
+          path: kernel/out/arch/arm64/boot/Image.gz-dtb
