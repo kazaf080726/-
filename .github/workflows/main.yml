@@ -1,33 +1,43 @@
-# 带超详细注释、每一步都讲清作用/避坑点的最终版本
-# 你直接复制到全新仓库的workflows里即可
-
-# 注释补充说明
-# 避坑核心设计：全程不修改任何系统文件（比如之前的 ln -sf 软链接），彻底避免环境污染，从根源解决 /bin/sh: Illegal option 报错
-# 兼容性优先：用Ubuntu latest + 原生GCC工具链，完美适配老三星MTK内核，不会出现Clang的汇编器、链接器兼容问题
-# SUSFS自动集成：特意在注释里说明，SukiSU的 setup.sh 会自动把SUSFS一起集成进去，不用你额外加任何代码
-# 资源限制：用 -j3 代替 -j$(nproc) ，避免GitHub Actions免费版CPU资源超限导致编译中途崩溃
-
-name: Build Kernel
-
+name: Build SukiSU Kernel
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    # 这里只改了这一行：ubuntu-20.04 → ubuntu-latest
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 后续所有步骤我完全没动，和你原来一模一样
-      - name: Set up environment
+      - name: Install toolchain
         run: |
           sudo apt update
-          sudo apt install -y git gcc make libssl-dev bc bison flex libelf-dev zip
+          sudo apt install -y bc bison flex libssl-dev libelf-dev
+          sudo apt install -y gcc-aarch64-linux-gnu
 
-      - name: Build kernel
+      - name: Clone kernel
+        run: git clone https://github.com/aHVzY2g/android-kernel-samsung-a22x kernel
+
+      - name: Clone SukiSU
+        run: git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra su
+
+      - name: Inject SukiSU
         run: |
-          bash setup.sh
-          make -j3
+          cp -r su/kernel kernel/drivers/su
+          cd kernel
+          bash drivers/su/setup.sh
+
+      - name: Defconfig
+        run: |
+          cd kernel
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=out a22x_defconfig
+
+      - name: Build
+        run: |
+          cd kernel
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- O=out -j3 Image.gz-dtb
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Image.gz-dtb
+          path: kernel/out/arch/arm64/boot/Image.gz-dtb
