@@ -4,7 +4,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # 必须用20.04才能编译这个老内核
+    runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v4
 
